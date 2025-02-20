@@ -68,19 +68,23 @@ bool validateResults(const int a[SIZE][SIZE], const int b[SIZE][SIZE])
     return true;
 }
 
-__global__ void multiplyMatricesKernel(int* c, const int* a, const int* b)
+__global__ void multiplyMatricesKernel(int* c, const int* a, const int* b, size_t pitch)
 {
     int i = blockIdx.y * blockDim.y + threadIdx.y; // a row number, we shall use it for indexing matrix a
     int j = blockIdx.x * blockDim.x + threadIdx.x; // a column number, we shall use it for indexing matrix b
+    int element_a = 0;
+    int element_b = 0;
     int val = 0;
 
-    if (i < SIZE && j < SIZE) // for the threads which don't have data to process,  a "thread check" to prevent out-of-bounds access.
+    if (i < SIZE && j < SIZE) // for the threads which don't have data to process
     {
         for (int k = 0; k < SIZE; k++)
         {
-            val += a[(i * SIZE) + k] * b[j + (k * SIZE)];
+            element_a = a[(i * pitch) + k];
+            element_b = b[j + (k * pitch)];
+            val += element_a * element_b;
         }
-        c[j + (i * SIZE)] = val;
+        c[j + (i * pitch)] = val;
     }
 }
 
@@ -90,6 +94,7 @@ cudaError_t multiplyWithCuda(int c[SIZE][SIZE], const int a[SIZE][SIZE], const i
     int* dev_a = 0;
     int* dev_b = 0;
     int* dev_c = 0;
+    size_t pitch;
     cudaError_t cudaStatus;
     dim3 threadsPerBlock(16, 16);
 
@@ -108,32 +113,32 @@ cudaError_t multiplyWithCuda(int c[SIZE][SIZE], const int a[SIZE][SIZE], const i
     }
 
     // Allocate GPU buffers for three vectors (two input, one output)
-    cudaStatus = cudaMalloc(&dev_a, SIZE * SIZE * sizeof(int));
+    cudaStatus = cudaMallocPitch(&dev_a, &pitch, SIZE * sizeof(int), SIZE);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc dev_a failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMalloc(&dev_b, SIZE * SIZE * sizeof(int));
+    cudaStatus = cudaMallocPitch(&dev_b, &pitch, SIZE * sizeof(int), SIZE);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc dev_b failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMalloc(&dev_c, SIZE * SIZE * sizeof(int));
+    cudaStatus = cudaMallocPitch(&dev_c, &pitch, SIZE * sizeof(int), SIZE);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc dev_c failed!");
         goto Error;
     }
 
     // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_a, a, SIZE * SIZE * sizeof(int), cudaMemcpyHostToDevice);
+    cudaStatus = cudaMemcpy2D(dev_a, pitch, a, SIZE * sizeof(int), SIZE * sizeof(int), SIZE, cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy dev_a failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMemcpy(dev_b, b, SIZE * SIZE * sizeof(int), cudaMemcpyHostToDevice);
+    cudaStatus = cudaMemcpy2D(dev_b, pitch, b, SIZE * sizeof(int), SIZE * sizeof(int), SIZE, cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy dev_b failed!");
         goto Error;
@@ -141,7 +146,7 @@ cudaError_t multiplyWithCuda(int c[SIZE][SIZE], const int a[SIZE][SIZE], const i
 
     printf("Launching kernel with GRID: (%d %d) and BLOCK: (%d %d) \n", blocksPerGrid.x, blocksPerGrid.y, threadsPerBlock.x, threadsPerBlock.y);
     // Launch a kernel on the GPU with one thread for each element.
-    multiplyMatricesKernel << <blocksPerGrid, threadsPerBlock >> > (dev_c, dev_a, dev_b);
+    multiplyMatricesKernel << <blocksPerGrid, threadsPerBlock >> > (dev_c, dev_a, dev_b, pitch);
 
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
@@ -159,7 +164,7 @@ cudaError_t multiplyWithCuda(int c[SIZE][SIZE], const int a[SIZE][SIZE], const i
     }
 
     // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(c, dev_c, SIZE * SIZE * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy2D(c, SIZE * sizeof(int), dev_c, pitch, SIZE * sizeof(int), SIZE, cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy dev_c failed!");
         goto Error;
