@@ -7,16 +7,16 @@
 #include <stdbool.h>
 #include <time.h>
 
-#define A_KILO_BYTES (1024)
-/* The dimensions of matrices, keep it at least 16. */
-#define V_SIZE (4 * A_KILO_BYTES)
+#define A_KILO (1024)
+/* The dimensions (number of elements) of matrices in both ways, width or hight. */
+#define SIZE (4 * A_KILO)
 
 /* Populate the input matrices with random numbers between 0 and 99. */
-void populateInputMatrix(int a[V_SIZE][V_SIZE], int b[V_SIZE][V_SIZE])
+void populateInputMatrix(int a[SIZE][SIZE], int b[SIZE][SIZE])
 {
-    for (int i = 0; i < V_SIZE; i++)
+    for (int i = 0; i < SIZE; i++)
     {
-        for (int j = 0; j < V_SIZE; j++)
+        for (int j = 0; j < SIZE; j++)
         {
             a[i][j] = rand() % 99;
             b[i][j] = rand() % 99;
@@ -25,12 +25,12 @@ void populateInputMatrix(int a[V_SIZE][V_SIZE], int b[V_SIZE][V_SIZE])
 }
 
 /* For visual verification. */
-void printMatrix(int m[V_SIZE][V_SIZE])
+void printMatrix(int m[SIZE][SIZE])
 {
     printf("Matrix: \n");
-    for (int i = 0; i < V_SIZE; i++)
+    for (int i = 0; i < SIZE; i++)
     {
-        for (int j = 0; j < V_SIZE; j++)
+        for (int j = 0; j < SIZE; j++)
         {
             printf("%d ", m[i][j]);
         }
@@ -38,13 +38,13 @@ void printMatrix(int m[V_SIZE][V_SIZE])
     }
 }
 
-void multiplyWithCPU(int c[V_SIZE][V_SIZE], const int a[V_SIZE][V_SIZE], const int b[V_SIZE][V_SIZE])
+void multiplyWithCPU(int c[SIZE][SIZE], const int a[SIZE][SIZE], const int b[SIZE][SIZE])
 {
-    for (int i = 0; i < V_SIZE; i++) // Chose a row of A
+    for (int i = 0; i < SIZE; i++) // Chose a row of A
     {
-        for (int j = 0; j < V_SIZE; j++) // Chose a col of B
+        for (int j = 0; j < SIZE; j++) // Chose a col of B
         {
-            for (int k = 0; k < V_SIZE; k++) // loop over the elements of chosen row and chosen col
+            for (int k = 0; k < SIZE; k++) // loop over the elements of chosen row and chosen col
             {
                 c[i][j] += a[i][k] * b[k][j];
             }
@@ -53,12 +53,12 @@ void multiplyWithCPU(int c[V_SIZE][V_SIZE], const int a[V_SIZE][V_SIZE], const i
     }
 }
 
-bool validateResults(const int a[V_SIZE][V_SIZE], const int b[V_SIZE][V_SIZE])
+bool validateResults(const int a[SIZE][SIZE], const int b[SIZE][SIZE])
 {
     {
-        for (int i = 0; i < V_SIZE; i++)
+        for (int i = 0; i < SIZE; i++)
         {
-            for (int j = 0; j < V_SIZE; j++)
+            for (int j = 0; j < SIZE; j++)
             {
                 if (a[i][j] != b[i][j])
                     return false;
@@ -71,21 +71,21 @@ bool validateResults(const int a[V_SIZE][V_SIZE], const int b[V_SIZE][V_SIZE])
 __global__ void multiplyMatricesKernel(int* c, const int* a, const int* b, size_t pitch)
 {
     int i = blockIdx.y * blockDim.y + threadIdx.y; // a row number, we shall use it for indexing matrix a
-    int j = blockIdx.x * blockDim.x + threadIdx.x; //  a column number, we shall use it for indexing matrix b
+    int j = blockIdx.x * blockDim.x + threadIdx.x; // a column number, we shall use it for indexing matrix b
     int val = 0;
 
-    if (i < V_SIZE && j < V_SIZE) // for the threads which don't have data to process
+    if (i < SIZE && j < SIZE) // for the threads which don't have data to process
     {
-        for (int k = 0; k < V_SIZE; k++)
+        for (int k = 0; k < SIZE; k++)
         {
-            val += a[(i * V_SIZE) + k] * b[j + (k * V_SIZE)];
+            val += a[(i * SIZE) + k] * b[j + (k * SIZE)];
         }
-        c[j + (i * V_SIZE)] = val;
+        c[j + (i * SIZE)] = val;
     }
 }
 
 // Helper function for using CUDA to add vectors in parallel.
-cudaError_t multiplyWithCuda(int c[V_SIZE][V_SIZE], const int a[V_SIZE][V_SIZE], const int b[V_SIZE][V_SIZE])
+cudaError_t multiplyWithCuda(int c[SIZE][SIZE], const int a[SIZE][SIZE], const int b[SIZE][SIZE])
 {
     int* dev_a = 0;
     int* dev_b = 0;
@@ -93,7 +93,13 @@ cudaError_t multiplyWithCuda(int c[V_SIZE][V_SIZE], const int a[V_SIZE][V_SIZE],
     size_t pitch;
     cudaError_t cudaStatus;
     dim3 threadsPerBlock(16, 16);
-    dim3 blocksPerGrid(V_SIZE / threadsPerBlock.x, V_SIZE / threadsPerBlock.y);
+
+    /* number of of blocks in any dimension of grid. */
+    int numBlocksXY = ceil(SIZE / threadsPerBlock.x);
+
+    /* if the SIZE is less than threadsPerBlock, make sure there is atleast 1 block. */
+    numBlocksXY = numBlocksXY == 0 ? 1 : numBlocksXY;
+    dim3 blocksPerGrid(numBlocksXY, numBlocksXY);
 
     // Choose which GPU to run on, change this on a multi-GPU system.
     cudaStatus = cudaSetDevice(0);
@@ -103,37 +109,38 @@ cudaError_t multiplyWithCuda(int c[V_SIZE][V_SIZE], const int a[V_SIZE][V_SIZE],
     }
 
     // Allocate GPU buffers for three vectors (two input, one output)
-    cudaStatus = cudaMallocPitch(&dev_a, &pitch, V_SIZE * sizeof(int), V_SIZE);
+    cudaStatus = cudaMallocPitch(&dev_a, &pitch, SIZE * sizeof(int), SIZE);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc dev_a failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMallocPitch(&dev_b, &pitch, V_SIZE * sizeof(int), V_SIZE);
+    cudaStatus = cudaMallocPitch(&dev_b, &pitch, SIZE * sizeof(int), SIZE);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc dev_b failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMallocPitch(&dev_c, &pitch, V_SIZE * sizeof(int), V_SIZE);
+    cudaStatus = cudaMallocPitch(&dev_c, &pitch, SIZE * sizeof(int), SIZE);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc dev_c failed!");
         goto Error;
     }
 
     // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy2D(dev_a, pitch, a, V_SIZE * sizeof(int), V_SIZE * sizeof(int), V_SIZE, cudaMemcpyHostToDevice);
+    cudaStatus = cudaMemcpy2D(dev_a, pitch, a, SIZE * sizeof(int), SIZE * sizeof(int), SIZE, cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy dev_a failed!");
         goto Error;
     }
 
-    cudaStatus = cudaMemcpy2D(dev_b, pitch, b, V_SIZE * sizeof(int), V_SIZE * sizeof(int), V_SIZE, cudaMemcpyHostToDevice);
+    cudaStatus = cudaMemcpy2D(dev_b, pitch, b, SIZE * sizeof(int), SIZE * sizeof(int), SIZE, cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy dev_b failed!");
         goto Error;
     }
 
+    printf("Launching kernel with GRID: (%d %d) and BLOCK: (%d %d) \n", blocksPerGrid.x, blocksPerGrid.y, threadsPerBlock.x, threadsPerBlock.y);
     // Launch a kernel on the GPU with one thread for each element.
     multiplyMatricesKernel << <blocksPerGrid, threadsPerBlock >> > (dev_c, dev_a, dev_b, pitch);
 
@@ -153,7 +160,7 @@ cudaError_t multiplyWithCuda(int c[V_SIZE][V_SIZE], const int a[V_SIZE][V_SIZE],
     }
 
     // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy2D(c, V_SIZE * sizeof(int), dev_c, pitch, V_SIZE * sizeof(int), V_SIZE, cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy2D(c, SIZE * sizeof(int), dev_c, pitch, SIZE * sizeof(int), SIZE, cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy dev_c failed!");
         goto Error;
@@ -169,10 +176,10 @@ Error:
 
 int main()
 {
-    int a[V_SIZE][V_SIZE] = { 0 };
-    int b[V_SIZE][V_SIZE] = { 0 };
-    int c[V_SIZE][V_SIZE] = { 0 };
-    int resultWithCPU[V_SIZE][V_SIZE] = { 0 };
+    int a[SIZE][SIZE] = { 0 };
+    int b[SIZE][SIZE] = { 0 };
+    int c[SIZE][SIZE] = { 0 };
+    int resultWithCPU[SIZE][SIZE] = { 0 };
 
     // For random values generation to populate input vectors.
     srand((unsigned int)time(NULL));
